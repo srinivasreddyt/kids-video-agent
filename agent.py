@@ -45,9 +45,9 @@ Reply with ONLY JSON:
  "character": "one-sentence consistent visual description of the main character(s) reused in every scene",
  "verses": [{{"lyrics": "2-4 short lines", "scene": "what the illustration shows"}}]}}
 Use 5 to 6 verses."""
-    msg = client.messages.create(model=CLAUDE_MODEL, max_tokens=2500,
+    msg = client.messages.create(model=CLAUDE_MODEL, max_tokens=8000,
                                  messages=[{"role": "user", "content": prompt}])
-    text = msg.content[0].text.strip()
+    text = "".join(b.text for b in msg.content if b.type == "text").strip()
     text = text[text.index("{"): text.rindex("}") + 1]
     return json.loads(text)
 
