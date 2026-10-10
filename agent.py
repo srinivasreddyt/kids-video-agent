@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from datetime import date
 from pathlib import Path
 
@@ -53,13 +54,21 @@ Use 5 to 6 verses."""
 
 
 def make_image(prompt: str, path: Path):
-    r = requests.post(
-        "https://api.openai.com/v1/images/generations",
-        headers={"Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}"},
-        json={"model": os.getenv("IMAGE_MODEL", "gpt-image-1"), "prompt": prompt,
-              "size": "1536x1024", "n": 1},
-        timeout=300,
-    )
+    for attempt in range(1, 8):
+        r = requests.post(
+            "https://api.openai.com/v1/images/generations",
+            headers={"Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}"},
+            json={"model": os.getenv("IMAGE_MODEL", "gpt-image-1"), "prompt": prompt,
+                  "size": "1536x1024", "n": 1},
+            timeout=300,
+        )
+        if r.status_code not in (429, 500, 502, 503) or attempt == 7:
+            break
+        wait = 20 * attempt
+        print(f"image API {r.status_code}, retrying in {wait}s: {r.text[:200]}")
+        time.sleep(wait)
+    if not r.ok:
+        print("image API error body:", r.text[:500])
     r.raise_for_status()
     import base64
     raw = base64.b64decode(r.json()["data"][0]["b64_json"])
@@ -220,16 +229,18 @@ def main():
     print("Topic:", meta["topic"], "|", meta["title"])
     (OUT / "meta.json").write_text(json.dumps(meta, indent=2))
 
-    song = OUT / "song.mp3"
-    sung = make_song(meta, song)
     scenes = []
     for i, v in enumerate(meta["verses"]):
         img, aud = OUT / f"s{i}.png", OUT / f"s{i}.mp3"
         make_image(f"{STYLE}. Main character: {meta['character']}. Scene: {v['scene']}", img)
-        if not sung:
-            asyncio.run(make_audio(v["lyrics"], aud))
         add_lyrics(img, v["lyrics"])
         scenes.append((img, aud))
+
+    song = OUT / "song.mp3"
+    sung = make_song(meta, song)  # after images so a failed image step doesn't waste credits
+    if not sung:
+        for v, (_, aud) in zip(meta["verses"], scenes):
+            asyncio.run(make_audio(v["lyrics"], aud))
 
     if sung:
         video = build_sung_video([s[0] for s in scenes], song, OUT / "final.mp4")
