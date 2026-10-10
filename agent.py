@@ -121,7 +121,9 @@ def make_song(meta: dict, path: Path) -> bool:
         path.write_bytes(r.content)
         return True
     except Exception as e:
-        print("ElevenLabs song failed, falling back to TTS:", getattr(e, "response", None) and e.response.text[:500] or e)
+        resp = getattr(e, "response", None)
+        body = resp.text[:500] if resp is not None else ""
+        print("ElevenLabs song failed, falling back to TTS:", e, body)
         return False
 
 
