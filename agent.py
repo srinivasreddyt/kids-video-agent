@@ -97,6 +97,55 @@ async def make_audio(text: str, path: Path):
     await edge_tts.Communicate(flat, VOICE, rate="-15%", pitch="+8Hz").save(str(path))
 
 
+VERSE_MS = int(os.getenv("VERSE_MS", "14000"))
+
+
+def make_song(meta: dict, path: Path) -> bool:
+    """Generate a sung version with ElevenLabs Music. Returns False if unavailable/failed."""
+    key = os.getenv("ELEVENLABS_API_KEY")
+    if not key:
+        return False
+    styles = ["children's nursery rhyme", "cheerful sung female vocal", "simple catchy melody",
+              "gentle ukulele, glockenspiel and soft percussion", "about 100 bpm"]
+    chunks = [{"text": f"[Verse {i + 1}]\n{v['lyrics']}", "duration_ms": VERSE_MS,
+               "positive_styles": styles, "negative_styles": ["dark", "aggressive", "spoken word"]}
+              for i, v in enumerate(meta["verses"])]
+    try:
+        r = requests.post("https://api.elevenlabs.io/v1/music",
+                          params={"output_format": "mp3_44100_128"},
+                          headers={"xi-api-key": key},
+                          json={"composition_plan": {"chunks": chunks},
+                                "model_id": os.getenv("ELEVENLABS_MODEL", "music_v2_5")},
+                          timeout=600)
+        r.raise_for_status()
+        path.write_bytes(r.content)
+        return True
+    except Exception as e:
+        print("ElevenLabs song failed, falling back to TTS:", getattr(e, "response", None) and e.response.text[:500] or e)
+        return False
+
+
+def build_sung_video(images: list[Path], song: Path, out: Path) -> Path:
+    clips = []
+    for i, img in enumerate(images):
+        clip = OUT / f"clip{i}.mp4"
+        subprocess.run([
+            "ffmpeg", "-y", "-loop", "1", "-i", str(img),
+            "-vf", f"zoompan=z='min(zoom+0.0005,1.12)':d={VERSE_MS * 25 // 1000}:s={W}x{H}:fps=25,format=yuv420p",
+            "-t", f"{VERSE_MS / 1000:.2f}", "-an", "-c:v", "libx264", str(clip)],
+            check=True, capture_output=True)
+        clips.append(clip)
+    listing = OUT / "list.txt"
+    listing.write_text("".join(f"file '{c.name}'\n" for c in clips))
+    joined = OUT / "joined.mp4"
+    subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(listing),
+                    "-c", "copy", str(joined)], check=True, capture_output=True)
+    subprocess.run(["ffmpeg", "-y", "-i", str(joined), "-i", str(song), "-map", "0:v", "-map", "1:a",
+                    "-c:v", "copy", "-c:a", "aac", "-shortest", str(out)],
+                   check=True, capture_output=True)
+    return out
+
+
 def duration(path: Path) -> float:
     r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
                         "-of", "csv=p=0", str(path)], capture_output=True, text=True, check=True)
@@ -169,15 +218,21 @@ def main():
     print("Topic:", meta["topic"], "|", meta["title"])
     (OUT / "meta.json").write_text(json.dumps(meta, indent=2))
 
+    song = OUT / "song.mp3"
+    sung = make_song(meta, song)
     scenes = []
     for i, v in enumerate(meta["verses"]):
         img, aud = OUT / f"s{i}.png", OUT / f"s{i}.mp3"
         make_image(f"{STYLE}. Main character: {meta['character']}. Scene: {v['scene']}", img)
-        asyncio.run(make_audio(v["lyrics"], aud))
+        if not sung:
+            asyncio.run(make_audio(v["lyrics"], aud))
         add_lyrics(img, v["lyrics"])
         scenes.append((img, aud))
 
-    video = build_video(scenes, OUT / "final.mp4")
+    if sung:
+        video = build_sung_video([s[0] for s in scenes], song, OUT / "final.mp4")
+    else:
+        video = build_video(scenes, OUT / "final.mp4")
     if "--no-upload" in sys.argv:
         print("Built", video)
         return
