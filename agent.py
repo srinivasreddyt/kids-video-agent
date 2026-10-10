@@ -59,10 +59,11 @@ def make_image(prompt: str, path: Path):
             "https://api.openai.com/v1/images/generations",
             headers={"Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}"},
             json={"model": os.getenv("IMAGE_MODEL", "gpt-image-1"), "prompt": prompt,
-                  "size": "1536x1024", "n": 1},
+                  "size": "1536x1024", "n": 1,
+                  "quality": os.getenv("IMAGE_QUALITY", "medium")},
             timeout=300,
         )
-        if r.status_code not in (429, 500, 502, 503) or attempt == 7:
+        if r.status_code not in (429, 500, 502, 503) or "insufficient_quota" in r.text or attempt == 7:
             break
         wait = 20 * attempt
         print(f"image API {r.status_code}, retrying in {wait}s: {r.text[:200]}")
