@@ -1,5 +1,6 @@
 """Daily kids nursery-rhyme video agent: Claude writes -> TTS sings -> images -> ffmpeg -> YouTube."""
 import asyncio
+import base64
 import json
 import os
 import subprocess
@@ -23,7 +24,8 @@ VOICE = os.getenv("TTS_VOICE", "en-US-AnaNeural")  # child-like voice
 PRIVACY = os.getenv("YT_PRIVACY", "private")  # private | unlisted | public
 W, H = 1920, 1080
 
-STYLE = ("bright cheerful children's picture-book illustration, soft rounded shapes, "
+STYLE = ("wide landscape composition, main subject centered, "
+         "bright cheerful children's picture-book illustration, soft rounded shapes, "
          "vivid pastel colors, friendly cartoon characters, no text, no scary elements")
 
 
@@ -53,28 +55,58 @@ Use 5 to 6 verses."""
     return json.loads(text)
 
 
-def make_image(prompt: str, path: Path):
-    for attempt in range(1, 8):
-        r = requests.post(
-            "https://api.openai.com/v1/images/generations",
-            headers={"Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}"},
-            json={"model": os.getenv("IMAGE_MODEL", "gpt-image-1"), "prompt": prompt,
-                  "size": "1536x1024", "n": 1,
-                  "quality": os.getenv("IMAGE_QUALITY", "medium")},
-            timeout=300,
-        )
-        if r.status_code not in (429, 500, 502, 503) or "insufficient_quota" in r.text or attempt == 7:
+def _post_with_retry(url: str, **kw) -> requests.Response:
+    for attempt in range(1, 6):
+        r = requests.post(url, timeout=300, **kw)
+        if r.status_code not in (429, 500, 502, 503) or "insufficient_quota" in r.text or attempt == 5:
             break
-        wait = 20 * attempt
+        wait = 15 * attempt
         print(f"image API {r.status_code}, retrying in {wait}s: {r.text[:200]}")
         time.sleep(wait)
     if not r.ok:
         print("image API error body:", r.text[:500])
     r.raise_for_status()
-    import base64
-    raw = base64.b64decode(r.json()["data"][0]["b64_json"])
-    path.with_suffix(".raw.png").write_bytes(raw)
-    img = Image.open(path.with_suffix(".raw.png")).convert("RGB")
+    return r
+
+
+def image_cloudflare(prompt: str) -> bytes:
+    acct, token = os.environ["CLOUDFLARE_ACCOUNT_ID"], os.environ["CLOUDFLARE_API_TOKEN"]
+    r = _post_with_retry(
+        f"https://api.cloudflare.com/client/v4/accounts/{acct}/ai/run/@cf/black-forest-labs/flux-1-schnell",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"prompt": prompt[:2000], "steps": 6})
+    body = r.json()
+    b64 = (body.get("result") or body)["image"]
+    return base64.b64decode(b64)
+
+
+def image_openai(prompt: str) -> bytes:
+    r = _post_with_retry(
+        "https://api.openai.com/v1/images/generations",
+        headers={"Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}"},
+        json={"model": os.getenv("IMAGE_MODEL", "gpt-image-1"), "prompt": prompt,
+              "size": "1536x1024", "n": 1, "quality": os.getenv("IMAGE_QUALITY", "low")})
+    return base64.b64decode(r.json()["data"][0]["b64_json"])
+
+
+def make_image(prompt: str, path: Path):
+    providers = []
+    if os.getenv("CLOUDFLARE_API_TOKEN") and os.getenv("CLOUDFLARE_ACCOUNT_ID"):
+        providers.append(image_cloudflare)
+    if os.getenv("OPENAI_API_KEY"):
+        providers.append(image_openai)  # fallback (or sole provider)
+    raw = None
+    for fn in providers:
+        try:
+            raw = fn(prompt)
+            break
+        except Exception as e:
+            print(f"{fn.__name__} failed: {e}")
+    if raw is None:
+        raise RuntimeError("no image provider succeeded")
+    raw_path = path.with_suffix(".raw.img")
+    raw_path.write_bytes(raw)
+    img = Image.open(raw_path).convert("RGB")
     scale = max(W / img.width, H / img.height)  # cover-crop to 16:9
     img = img.resize((int(img.width * scale) + 1, int(img.height * scale) + 1), Image.LANCZOS)
     left, top = (img.width - W) // 2, (img.height - H) // 2

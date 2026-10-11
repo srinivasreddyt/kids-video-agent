@@ -6,7 +6,7 @@ AI-disclosed). Runs on GitHub Actions cron.
 
 ## Setup
 1. **Anthropic key**: console.anthropic.com -> API keys -> `ANTHROPIC_API_KEY`.
-2. **OpenAI key** (images): platform.openai.com -> `OPENAI_API_KEY`.
+2. **Images**: free Cloudflare Workers AI (FLUX Schnell) via `CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_TOKEN`; optional `OPENAI_API_KEY` as a paid fallback.
 3. **YouTube**: create a Google Cloud project, enable *YouTube Data API v3*, configure the OAuth
    consent screen (add yourself as a test user), create an *OAuth client ID* of type **Desktop app**,
    download it as `client_secret.json`. Then run once on your PC:
