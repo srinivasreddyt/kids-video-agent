@@ -2,6 +2,7 @@
 import asyncio
 import base64
 import json
+import shutil
 import os
 import subprocess
 import sys
@@ -13,6 +14,8 @@ import anthropic
 import edge_tts
 import requests
 from PIL import Image, ImageDraw, ImageFont
+
+from animate import build_animated_video
 
 ROOT = Path(__file__).parent
 OUT = ROOT / "out" / date.today().isoformat()
@@ -266,6 +269,7 @@ def main():
     for i, v in enumerate(meta["verses"]):
         img, aud = OUT / f"s{i}.png", OUT / f"s{i}.mp3"
         make_image(f"{STYLE}. Main character: {meta['character']}. Scene: {v['scene']}", img)
+        shutil.copy(img, OUT / f"s{i}_clean.png")  # lyric-free copy for the animated build
         add_lyrics(img, v["lyrics"])
         scenes.append((img, aud))
 
@@ -276,7 +280,14 @@ def main():
             asyncio.run(make_audio(v["lyrics"], aud))
 
     if sung:
-        video = build_sung_video([s[0] for s in scenes], song, OUT / "final.mp4")
+        try:
+            video = build_animated_video(
+                [OUT / f"s{i}_clean.png" for i in range(len(scenes))],
+                [v["lyrics"].split("\n") for v in meta["verses"]],
+                song, OUT / "final.mp4", OUT, VERSE_MS / 1000)
+        except Exception as e:
+            print("animation failed, using static video:", e)
+            video = build_sung_video([s[0] for s in scenes], song, OUT / "final.mp4")
     else:
         video = build_video(scenes, OUT / "final.mp4")
     if "--no-upload" in sys.argv:
