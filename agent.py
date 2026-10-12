@@ -13,7 +13,7 @@ from pathlib import Path
 import anthropic
 import edge_tts
 import requests
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 from animate import build_animated_video
 
@@ -72,15 +72,26 @@ def _post_with_retry(url: str, **kw) -> requests.Response:
     return r
 
 
-def image_cloudflare(prompt: str) -> bytes:
+def _cloudflare(model: str, payload: dict) -> bytes:
     acct, token = os.environ["CLOUDFLARE_ACCOUNT_ID"], os.environ["CLOUDFLARE_API_TOKEN"]
     r = _post_with_retry(
-        f"https://api.cloudflare.com/client/v4/accounts/{acct}/ai/run/@cf/black-forest-labs/flux-1-schnell",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"prompt": prompt[:2000], "steps": 6})
+        f"https://api.cloudflare.com/client/v4/accounts/{acct}/ai/run/{model}",
+        headers={"Authorization": f"Bearer {token}"}, json=payload)
+    if "image" in r.headers.get("content-type", ""):  # some models return raw image bytes
+        return r.content
     body = r.json()
-    b64 = (body.get("result") or body)["image"]
-    return base64.b64decode(b64)
+    return base64.b64decode((body.get("result") or body)["image"])
+
+
+def image_lucid(prompt: str) -> bytes:
+    """True 16:9 at 1344x768 (no crop, no stretch). Billed per 512px tile, so mostly beyond the free tier."""
+    return _cloudflare("@cf/leonardo/lucid-origin",
+                       {"prompt": prompt[:2000], "width": 1344, "height": 768, "num_steps": 20})
+
+
+def image_schnell(prompt: str) -> bytes:
+    """Free but square 1024x1024, so it gets cropped and stretched (softer)."""
+    return _cloudflare("@cf/black-forest-labs/flux-1-schnell", {"prompt": prompt[:2000], "steps": 6})
 
 
 def image_openai(prompt: str) -> bytes:
@@ -95,7 +106,9 @@ def image_openai(prompt: str) -> bytes:
 def make_image(prompt: str, path: Path):
     providers = []
     if os.getenv("CLOUDFLARE_API_TOKEN") and os.getenv("CLOUDFLARE_ACCOUNT_ID"):
-        providers.append(image_cloudflare)
+        if os.getenv("CF_IMAGE_MODEL", "lucid") == "lucid":
+            providers.append(image_lucid)
+        providers.append(image_schnell)
     if os.getenv("OPENAI_API_KEY"):
         providers.append(image_openai)  # fallback (or sole provider)
     raw = None
@@ -113,7 +126,8 @@ def make_image(prompt: str, path: Path):
     scale = max(W / img.width, H / img.height)  # cover-crop to 16:9
     img = img.resize((int(img.width * scale) + 1, int(img.height * scale) + 1), Image.LANCZOS)
     left, top = (img.width - W) // 2, (img.height - H) // 2
-    img.crop((left, top, left + W, top + H)).save(path)
+    img = img.crop((left, top, left + W, top + H))
+    img.filter(ImageFilter.UnsharpMask(radius=2, percent=60, threshold=3)).save(path)
 
 
 def font(size: int):
