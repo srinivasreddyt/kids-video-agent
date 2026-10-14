@@ -1,7 +1,7 @@
 name: Daily kids video
 on:
   schedule:
-    - cron: "30 12 * * *"   # 12:30 UTC every day
+    - cron: "17 12 * * *"   # 12:17 UTC (about 5:47 PM IST); odd minute avoids GitHub's busy :00/:30 slots
   workflow_dispatch: {}
 
 permissions:
