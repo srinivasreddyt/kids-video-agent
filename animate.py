@@ -43,17 +43,28 @@ def _bubble(path: Path, size: int):
     img.save(path)
 
 
-def _lyric_layer(shown: list[str], total: int, path: Path):
-    f = font(64)
+def lyric_layer(shown: list[str], total_lines: list[str] | int, path: Path):
+    """Transparent full-frame layer with a caption band; `total_lines` sizes the band and font so it
+    doesn't jump as lines appear. Accepts the full line list (preferred) or just a line count."""
+    all_lines = total_lines if isinstance(total_lines, list) else shown
+    total = len(total_lines) if isinstance(total_lines, list) else total_lines
+    size = 64 if total <= 3 else 56
+    probe = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    while size > 28 and max(probe.textlength(l, font=font(size)) for l in all_lines) > W - 120:
+        size -= 4  # shrink so long lines (e.g. titles) never run off-screen
+    f, step = font(size), int(size * 1.4)
     layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
-    band_h = 90 * total + 40
+    band_h = step * total + 40
     d.rectangle((0, H - band_h, W, H), fill=(0, 0, 0, 150))
     for i, line in enumerate(shown):
         w = d.textlength(line, font=f)
-        d.text(((W - w) / 2, H - band_h + 25 + i * 90), line, font=f, fill="white",
+        d.text(((W - w) / 2, H - band_h + 25 + i * step), line, font=f, fill="white",
                stroke_width=2, stroke_fill="black")
     layer.save(path)
+
+
+_lyric_layer = lyric_layer
 
 
 def _moves(n: int):
@@ -94,7 +105,7 @@ def _scene(i: int, img: Path, lines: list[str], dur: float, work: Path) -> Path:
     total, start, span = len(lines), 0.6, max(dur - 1.5, 1.0)
     for k in range(1, total + 1):  # lyric lines appear one by one
         p = work / f"lyr{i}_{k}.png"
-        _lyric_layer(lines[:k], total, p)
+        lyric_layer(lines[:k], lines, p)
         n = add_input(p)
         a = start + (k - 1) * span / total
         b = start + k * span / total if k < total else length + 1
@@ -110,9 +121,13 @@ def _scene(i: int, img: Path, lines: list[str], dur: float, work: Path) -> Path:
 
 
 def build_animated_video(images: list[Path], lyrics: list[list[str]], audio: Path,
-                         out: Path, work: Path, verse_s: float) -> Path:
-    clips = [_scene(i, img, lines, verse_s, work) for i, (img, lines) in enumerate(zip(images, lyrics))]
+                         out: Path, work: Path, durs: list[float] | float) -> Path:
+    """`durs`: seconds per scene (one number applies to all). Scene k starts at sum(durs[:k])."""
+    if not isinstance(durs, list):
+        durs = [durs] * len(images)
+    clips = [_scene(i, img, lines, d, work) for i, (img, lines, d) in enumerate(zip(images, lyrics, durs))]
     n = len(clips)
+    starts = [sum(durs[:k]) for k in range(n + 1)]
     cmd = ["ffmpeg", "-y"]
     for c in clips:
         cmd += ["-i", str(c)]
@@ -124,10 +139,10 @@ def build_animated_video(images: list[Path], lyrics: list[list[str]], audio: Pat
         for k in range(1, n):
             lab = "[v]" if k == n - 1 else f"[x{k}]"
             parts.append(f"{prev}[{k}:v]xfade=transition={TRANSITIONS[(k - 1) % len(TRANSITIONS)]}"
-                         f":duration={FADE}:offset={k * verse_s:.3f}{lab}")
+                         f":duration={FADE}:offset={starts[k]:.3f}{lab}")
             prev = lab
         graph = ";".join(parts)
-    cmd += ["-filter_complex", graph, "-map", "[v]", "-map", f"{n}:a", "-t", f"{n * verse_s:.2f}",
+    cmd += ["-filter_complex", graph, "-map", "[v]", "-map", f"{n}:a", "-t", f"{starts[n]:.2f}",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "192k", str(out)]
     _run(cmd)

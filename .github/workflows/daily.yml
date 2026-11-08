@@ -10,7 +10,7 @@ permissions:
 jobs:
   make-video:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -30,6 +30,7 @@ jobs:
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
           YT_PRIVACY: ${{ vars.YT_PRIVACY || 'private' }}
+          CHANNEL_NAME: ${{ vars.CHANNEL_NAME || 'Kids Rhyme Time' }}
       - name: Save topic history
         run: |
           git config user.name "kids-video-bot"

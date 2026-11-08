@@ -1,0 +1,32 @@
+name: Test pipeline (dry run)
+on:
+  workflow_dispatch: {}
+
+jobs:
+  dry-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core
+      - run: pip install -r requirements.txt
+      # Placeholder images, free TTS voice, no upload. Only calls Claude (a few cents).
+      - run: python agent.py --dry --no-upload
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CHANNEL_NAME: ${{ vars.CHANNEL_NAME || 'Kids Rhyme Time' }}
+      - run: |
+          D=$(ls -d out/*/ | head -1)
+          for t in 2 8 22 40 100 128; do ffmpeg -y -ss $t -i ${D}final.mp4 -frames:v 1 ${D}frame_$t.png; done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dry-run
+          path: |
+            out/*/final.mp4
+            out/*/thumbnail.jpg
+            out/*/meta.json
+            out/*/frame_*.png
