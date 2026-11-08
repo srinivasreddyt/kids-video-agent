@@ -147,7 +147,8 @@ Reply with ONLY JSON: {{"approved": true|false, "problems": ["..."]}}
 def _post_with_retry(url: str, **kw) -> requests.Response:
     for attempt in range(1, 6):
         r = requests.post(url, timeout=300, **kw)
-        if r.status_code not in (429, 500, 502, 503) or "insufficient_quota" in r.text or attempt == 5:
+        out_of_quota = "insufficient_quota" in r.text or "daily free allocation" in r.text
+        if r.status_code not in (429, 500, 502, 503) or out_of_quota or attempt == 5:
             break
         wait = 15 * attempt
         print(f"image API {r.status_code}, retrying in {wait}s: {r.text[:200]}")
