@@ -2,7 +2,13 @@ name: Daily kids video
 on:
   schedule:
     - cron: "17 12 * * *"   # 12:17 UTC (about 5:47 PM IST); odd minute avoids GitHub's busy :00/:30 slots
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Force a video type (scheduled runs alternate automatically)"
+        type: choice
+        options: [auto, classic, educational]
+        default: auto
 
 permissions:
   contents: write
@@ -31,6 +37,7 @@ jobs:
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
           YT_PRIVACY: ${{ vars.YT_PRIVACY || 'private' }}
           CHANNEL_NAME: ${{ vars.CHANNEL_NAME || 'Kids Rhyme Time' }}
+          FORCE_MODE: ${{ inputs.mode != 'auto' && inputs.mode || '' }}
       - name: Save topic history
         run: |
           git config user.name "kids-video-bot"

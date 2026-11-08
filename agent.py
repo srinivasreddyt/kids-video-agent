@@ -28,7 +28,8 @@ OUT = ROOT / "out" / date.today().isoformat()
 HISTORY = ROOT / "history.json"
 CHARACTERS = json.loads((ROOT / "characters.json").read_text(encoding="utf-8"))
 DRY = "--dry" in sys.argv
-FORCE_MODE = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--mode=")), None)
+FORCE_MODE = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--mode=")),
+                  os.getenv("FORCE_MODE", "")) or None  # classic | educational; None = alternate
 PREFIX = {"classic": "Classic: ", "educational": "Concept: "}  # history entries are tagged by mode
 
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-5-5")
@@ -236,9 +237,11 @@ def check_image(path: Path, scene: str, ch: dict) -> tuple[bool, str, str]:
                                      "data": base64.b64encode(buf.getvalue()).decode()}},
         {"type": "text", "text": f"""This is an illustration for a toddler nursery-rhyme video.
 It should show: {scene}. The character should be {ch['name']}: {ch['look']}.
-Flag ONLY clear, obvious problems: (a) badly distorted anatomy (extra/missing limbs or heads, melted or
-merged faces), (b) scary, violent or inappropriate content, (c) visible text, letters or watermarks,
-(d) the main character or scene is clearly wrong. Minor style variation is fine.
+Flag ONLY serious, obvious problems: (a) badly distorted anatomy (extra/missing limbs or heads, melted or
+merged faces), (b) scary, violent or inappropriate content, (c) clearly visible text, letters or
+watermarks, (d) the main character is clearly the wrong animal or missing, or the scene is clearly
+unrelated to the description. IGNORE small differences: accessory or clothing colors and details (boots,
+scarf, hat, bow), exact eye size, background objects, and minor style variation. If unsure, answer ok.
 Reply with ONLY JSON: {{"ok": true|false, "severity": "none"|"minor"|"unsafe", "reason": "short"}}"""}],
         3000)
     return bool(r.get("ok")), r.get("severity", "none"), r.get("reason", "")
