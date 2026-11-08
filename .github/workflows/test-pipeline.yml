@@ -1,6 +1,12 @@
 name: Test pipeline (dry run)
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Which kind of video to test"
+        type: choice
+        options: [classic, educational]
+        default: classic
 
 jobs:
   dry-run:
@@ -15,16 +21,16 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core
       - run: pip install -r requirements.txt
       # Placeholder images, free TTS voice, no upload. Only calls Claude (a few cents).
-      - run: python agent.py --dry --no-upload
+      - run: python agent.py --dry --no-upload --mode=${{ inputs.mode }}
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CHANNEL_NAME: ${{ vars.CHANNEL_NAME || 'Kids Rhyme Time' }}
       - run: |
           D=$(ls -d out/*/ | head -1)
-          for t in 2 8 22 40 100 128; do ffmpeg -y -ss $t -i ${D}final.mp4 -frames:v 1 ${D}frame_$t.png; done
+          for t in 2 8 22 40 70 100; do ffmpeg -y -ss $t -i ${D}final.mp4 -frames:v 1 ${D}frame_$t.png || true; done
       - uses: actions/upload-artifact@v4
         with:
-          name: dry-run
+          name: dry-run-${{ inputs.mode }}
           path: |
             out/*/final.mp4
             out/*/thumbnail.jpg

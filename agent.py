@@ -28,6 +28,8 @@ OUT = ROOT / "out" / date.today().isoformat()
 HISTORY = ROOT / "history.json"
 CHARACTERS = json.loads((ROOT / "characters.json").read_text(encoding="utf-8"))
 DRY = "--dry" in sys.argv
+FORCE_MODE = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--mode=")), None)
+PREFIX = {"classic": "Classic: ", "educational": "Concept: "}  # history entries are tagged by mode
 
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-5-5")
 VOICE = os.getenv("TTS_VOICE", "en-US-AnaNeural")  # child-like voice (TTS fallback)
@@ -56,46 +58,79 @@ def claude(content, max_tokens: int = 8000) -> dict:
     return json.loads(text[text.index("{"): text.rindex("}") + 1])
 
 
+def slot(lyrics: str, longest: float) -> float:
+    """Scene length from line count, so a 1-2 line section isn't padded to a full 16s slot."""
+    return max(8.0, min(longest, 3.5 * len(lyrics.split("\n")) + 4))
+
+
 def load_history() -> list[str]:
     return json.loads(HISTORY.read_text()) if HISTORY.exists() else []
 
 
 # ---------- 1. writing + review ----------
 
-def write_rhyme(past: list[str], ch: dict, feedback: str) -> dict:
+def pick_subject(mode: str, history: list[str]) -> str:
+    """Next unused classic rhyme / educational concept; cycles once the list is exhausted."""
+    pool = json.loads((ROOT / ("classics.json" if mode == "classic" else "concepts.json")).read_text(encoding="utf-8"))
+    prefix = PREFIX[mode]
+    used = [h[len(prefix):] for h in history if h.startswith(prefix)]
+    unused = [p for p in pool if p not in used]
+    return unused[0] if unused else pool[len(used) % len(pool)]
+
+
+def write_rhyme(past: list[str], ch: dict, mode: str, subject: str, feedback: str) -> dict:
     fb = f"\nA reviewer REJECTED your previous attempt because: {feedback}\nFix every one of those problems.\n" if feedback else ""
-    return claude(f"""Write an ORIGINAL nursery rhyme song for toddlers (ages 2-5) starring {ch['name']}
-({ch['look']}). Do not copy or closely imitate any existing song or rhyme. Simple words, strong bouncy
-rhythm, clean rhymes, a gentle positive message. Pick ONE theme from: {THEMES}.
-Already made (choose a different topic): {past[-60:]}
+    if mode == "classic":
+        task = f"""Create a sing-along video for the traditional nursery rhyme "{subject}", performed by
+{ch['name']} ({ch['look']}). Use ONLY the traditional, widely known public-domain words (no modern
+copyrighted versions or modern added verses). If a traditional line is scary, violent or unsuitable for
+toddlers, use the gentlest traditional wording. Keep the traditional wording and order faithfully.
+Split the rhyme into exactly 4 sections ("verses", 1-4 short lines each, in the rhyme's order, together
+covering the whole rhyme; for a very short rhyme you may repeat its best-known lines). The CHORUS is the
+rhyme's most iconic 1-2 lines and repeats after every section. In every "scene" show {ch['name']} acting
+out that part of the rhyme (taking the rhyme's role if it has characters). Pick the best theme from {THEMES}."""
+        title_rule = f"'{subject}' + ' | Classic Nursery Rhyme for Kids'"
+    else:
+        task = f"""Write an ORIGINAL educational song for toddlers (ages 2-5) starring {ch['name']}
+({ch['look']}) that teaches this concept: "{subject}". It needs a clear learning goal, accurate simple facts,
+lots of repetition, and a gentle positive tone; teach one new idea per verse. Do not copy any existing
+song. The theme is the closest of: {THEMES}. The CHORUS is 2-3 catchy lines that repeat after every verse
+and restate the main idea. Exactly 4 verses, each 3-4 short lines."""
+        title_rule = f"'Learn {subject} with {ch['name']}' (shorten if needed) + ' | Kids Learning Song'"
+    return claude(f"""{task}
+Already made (avoid repeating): {past[-60:]}
 {fb}
-Structure: exactly 4 verses, each 3-4 short lines, plus a CHORUS of 2-3 very catchy short lines that
-repeats after every verse (the chorus must stay the same each time).
 Every "scene" is a concrete picture description: what {ch['name']} is doing, where, and which objects are
 visible. No text or letters in pictures. Keep the character's look exactly as described.
 
 Reply with ONLY JSON:
-{{"topic": "short topic", "theme": "one of the themes",
- "title": "YouTube title under 70 chars: {ch['name']} + topic, ending ' | Nursery Rhyme for Kids'",
+{{"topic": "short topic", "theme": "one of the themes", "learning_goal": "one sentence",
+ "title": "YouTube title under 70 chars: {title_rule}",
  "thumb_text": "2-4 words, ALL CAPS, catchy",
- "description": "2-3 sentence parent-friendly description",
+ "description": "2-3 sentence parent-friendly description{' mentioning it is a traditional rhyme' if mode == 'classic' else ' stating what children will learn'}",
  "tags": ["12 relevant tags incl. kids songs, nursery rhymes, toddler songs"],
- "chorus": {{"lyrics": "line1\\nline2", "scene": "..."}},
- "verses": [{{"lyrics": "line1\\nline2\\nline3", "scene": "..."}}]}}""")
+ "chorus": {{"lyrics": "line1\nline2", "scene": "..."}},
+ "verses": [{{"lyrics": "line1\nline2\nline3", "scene": "..."}}]}}""")
 
 
-def get_rhyme(history: list[str], ch: dict) -> dict:
+def get_rhyme(history: list[str], ch: dict, mode: str, subject: str) -> dict:
+    if mode == "classic":
+        rules = f"""the lyrics must be the TRADITIONAL public-domain wording of "{subject}", faithful to the
+well-known version; reject modern copyrighted adaptations or invented extra verses, and anything that
+would have toddlers misremember the rhyme. Do NOT reject it for being a well-known rhyme (that is the point)"""
+    else:
+        rules = f"""the song must teach "{subject}" accurately (check counting, colors, order and facts
+carefully); reject lines that clearly copy a well-known song; reject unclear learning goals"""
     feedback = ""
     for attempt in range(3):
-        meta = write_rhyme(history, ch, feedback)
+        meta = write_rhyme(history, ch, mode, subject, feedback)
         if len(meta.get("verses", [])) != 4 or "chorus" not in meta:
             feedback = "it must have exactly 4 verses and a chorus"
             continue
-        review = claude(f"""You are a strict children's-content reviewer. Review this nursery rhyme for
-toddlers (ages 2-5). Reject ONLY for real problems: anything unsafe, scary, violent, or inappropriate;
-lines that clearly copy a well-known song or rhyme; broken rhyme/rhythm; vocabulary too hard for toddlers;
-factual errors (e.g. wrong counting or colors); scenes that need text or letters to make sense; or scene
-descriptions that contradict the character ({ch['look']}).
+        review = claude(f"""You are a strict children's-content reviewer. Review this song for toddlers
+(ages 2-5). Reject ONLY for real problems: anything unsafe, scary, violent or inappropriate; broken
+rhyme/rhythm; vocabulary too hard for toddlers; scenes that need text or letters to make sense; scene
+descriptions that contradict the character ({ch['look']}); and, specifically: {rules}.
 Reply with ONLY JSON: {{"approved": true|false, "problems": ["..."]}}
 
 {json.dumps(meta, indent=1)}""", 3000)
@@ -391,8 +426,11 @@ def main():
     OUT.mkdir(parents=True, exist_ok=True)
     history = load_history()
     ch = CHARACTERS[len(history) % len(CHARACTERS)]  # rotates with each successful upload
-    meta = get_rhyme(history, ch)
-    print(f"Topic: {meta['topic']} | {meta['title']} | Character: {ch['name']}")
+    # Alternate: even number of past uploads -> classic rhyme, odd -> educational original song.
+    mode = FORCE_MODE or ("classic" if len(history) % 2 == 0 else "educational")
+    subject = pick_subject(mode, history)
+    meta = get_rhyme(history, ch, mode, subject)
+    print(f"Mode: {mode} | Subject: {subject} | {meta['title']} | Character: {ch['name']}")
     (OUT / "meta.json").write_text(json.dumps(meta, indent=2))
 
     def picture(name: str, scene: str) -> Path:
@@ -412,8 +450,9 @@ def main():
              "song": "[Intro]\n{gentle instrumental intro, no vocals}"}]
     for i, v in enumerate(meta["verses"]):
         plan.append({"kind": "verse", "image": verse_imgs[i], "lines": v["lyrics"].split("\n"),
-                     "dur": VERSE_S, "song": f"[Verse {i + 1}]\n{v['lyrics']}"})
-        plan.append({"kind": "chorus", "image": chorus_img, "lines": chorus_lines, "dur": CHORUS_S,
+                     "dur": slot(v["lyrics"], VERSE_S), "song": f"[Verse {i + 1}]\n{v['lyrics']}"})
+        plan.append({"kind": "chorus", "image": chorus_img, "lines": chorus_lines,
+                     "dur": slot(meta["chorus"]["lyrics"], CHORUS_S),
                      "song": f"[Chorus]\n{meta['chorus']['lyrics']}"})
     plan.append({"kind": "outro", "image": hello, "lines": ["Thanks for watching!", f"Subscribe to {CHANNEL}"],
                  "dur": OUTRO_S, "song": "[Outro]\n{gentle instrumental ending, no vocals}"})
@@ -437,7 +476,7 @@ def main():
         return
     vid = upload(video, thumb, meta)
     print("Uploaded: https://youtu.be/" + vid)
-    HISTORY.write_text(json.dumps(history + [meta["topic"]], indent=2))
+    HISTORY.write_text(json.dumps(history + [PREFIX[mode] + subject], indent=2))
 
 
 if __name__ == "__main__":
